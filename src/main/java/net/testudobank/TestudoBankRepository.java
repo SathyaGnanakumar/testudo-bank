@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -37,6 +38,27 @@ public class TestudoBankRepository {
       return Optional.empty();
     }
 
+  }
+
+  public static String getLoanDueDate(JdbcTemplate jdbcTemplate, String customerID) {
+    String getLoanDueDateSql = String.format("SELECT LoanDueDate FROM LoanLogs WHERE CustomerID='%s';", customerID);
+    String loanDueDate = jdbcTemplate.queryForObject(getLoanDueDateSql, String.class);
+    if (loanDueDate != null) {
+       return loanDueDate;
+    } else {
+       return "No loans taken out currently";
+    }
+
+  }
+
+  public static int getLoanBalanceInPennies(JdbcTemplate jdbcTemplate, String customerID) {
+    String getLoanDueDateSql = String.format("SELECT LoanBalance FROM LoanLogs WHERE CustomerID='%s';", customerID);
+    Integer loanBalance = jdbcTemplate.queryForObject(getLoanDueDateSql, Integer.class);
+    if (loanBalance != null) {
+      return loanBalance;
+  } else {
+      return 0; // Or any default value indicating no LoanLogs or an error
+  }
   }
 
   public static int getCustomerOverdraftBalanceInPennies(JdbcTemplate jdbcTemplate, String customerID) {
@@ -145,6 +167,11 @@ public class TestudoBankRepository {
     jdbcTemplate.update(balanceDecreaseSql);
   }
 
+  public static void decreaseLoanBalance (JdbcTemplate jdbcTemplate, String customerID, int decreaseAmtInPennies) {
+    String loanBalanceDecreaseSql = String.format("UPDATE LoanLogs SET LoanBalance = LoanBalance - %d WHERE CustomerID='%s';", decreaseAmtInPennies, customerID);
+    jdbcTemplate.update(loanBalanceDecreaseSql);
+  }
+
   public static void decreaseCustomerCryptoBalance(JdbcTemplate jdbcTemplate, String customerID, String cryptoName, double decreaseAmt) {
     String balanceDecreaseSql = "UPDATE CryptoHoldings SET CryptoAmount = CryptoAmount - ? WHERE CustomerID= ? AND CryptoName= ?";
     jdbcTemplate.update(balanceDecreaseSql, decreaseAmt, customerID, cryptoName);
@@ -153,6 +180,11 @@ public class TestudoBankRepository {
   public static void deleteRowFromOverdraftLogsTable(JdbcTemplate jdbcTemplate, String customerID, String timestamp) {
     String deleteRowFromOverdraftLogsSql = String.format("DELETE from OverdraftLogs where CustomerID='%s' AND Timestamp='%s';", customerID, timestamp);
     jdbcTemplate.update(deleteRowFromOverdraftLogsSql);
+  }
+
+  public static void deleteRowFromLoanLogsTable(JdbcTemplate jdbcTemplate, String customerID) {
+    String deleteRowFromLoanLogsSql = String.format("DELETE from LoanLogs where CustomerID='%s';", customerID);
+    jdbcTemplate.update(deleteRowFromLoanLogsSql);
   }
 
   public static void insertRowToTransferLogsTable(JdbcTemplate jdbcTemplate, String customerID, String recipientID, String timestamp, int transferAmount) {
@@ -168,13 +200,38 @@ public class TestudoBankRepository {
     String cryptoHistorySql = "INSERT INTO CryptoHistory (CustomerID, Timestamp, Action, CryptoName, CryptoAmount) VALUES (?, ?, ?, ?, ?)";
     jdbcTemplate.update(cryptoHistorySql, customerID, timestamp, action, cryptoName, cryptoAmount);
   }
+
+  public static void insertRowToLoanLogsTable(JdbcTemplate jdbcTemplate, String customerID, int loanAmount, String loanDueDate) {
+    try {
+        String loanHistorySql = "INSERT INTO LoanLogs (CustomerID, loanAmount, loanDueDate) VALUES (?, ?, ?)";
+        jdbcTemplate.update(loanHistorySql, customerID, loanAmount, loanDueDate);
+        // Log success or any relevant information
+        System.out.println("Inserted row into LoanLogs table successfully.");
+    } catch (DataAccessException e) {
+        // Log the exception details
+        System.err.println("Error inserting row into LoanLogs table: " + e.getMessage());
+        e.printStackTrace();
+        // You can throw the exception again or handle it according to your application's logic
+    }
+}
   
   public static boolean doesCustomerExist(JdbcTemplate jdbcTemplate, String customerID) { 
     String getCustomerIDSql =  String.format("SELECT CustomerID FROM Customers WHERE CustomerID='%s';", customerID);
     if (jdbcTemplate.queryForObject(getCustomerIDSql, String.class) != null) {
-     return true;
+      return true;
     } else {
       return false;
     }
+  }
+
+  public static boolean doesCustomerHaveLoan(JdbcTemplate jdbcTemplate, String customerID) {
+    String getCustomerIDSql = String.format("SELECT CustomerID FROM LoanLogs WHERE CustomerID='%s';", customerID);
+    String customerIDFromLoansTable;
+    try {
+      customerIDFromLoansTable = jdbcTemplate.queryForObject(getCustomerIDSql, String.class);
+    } catch (EmptyResultDataAccessException e) {
+      customerIDFromLoansTable = null;
+    }
+    return customerIDFromLoansTable != null;
   }
 }

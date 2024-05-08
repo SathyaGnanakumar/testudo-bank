@@ -30,6 +30,18 @@ public class User {
 	private double overDraftBalance;
 
   @Setter @Getter
+	private double loanBalance;
+
+  @Setter @Getter
+	private String loanDueDate;
+
+  @Setter @Getter @Positive
+  private double loanRequestAmount;
+
+  @Setter @Getter @Positive
+  private double loanRepayAmount;
+
+  @Setter @Getter
 	private String logs;
 
   @Setter @Getter

@@ -35,6 +35,17 @@ CREATE TABLE Passwords (
 cursor.execute(create_password_table_sql)
 
 # Make empty OverdraftLogs table
+create_loanlogs_table_sql = '''
+CREATE TABLE LoanLogs (
+  CustomerID varchar(255),
+  LoanAmt int,
+  LoanDueDate DATETIME
+);
+'''
+cursor.execute(create_loanlogs_table_sql)
+
+
+# Make empty OverdraftLogs table
 create_overdraftlogs_table_sql = '''
 CREATE TABLE OverdraftLogs (
   CustomerID varchar(255),

@@ -40,6 +40,8 @@ public class MvcController {
   private final static int MAX_NUM_TRANSACTIONS_DISPLAYED = 3;
   private final static int MAX_NUM_TRANSFERS_DISPLAYED = 10;
   private final static int MAX_REVERSABLE_TRANSACTIONS_AGO = 3;
+  private final static int MINIMUM_BALANCE_FOR_LOAN_IN_PENNIES = 10000;
+  private final static int DAYS_TO_REPAY_LOAN = 30;
   private final static String HTML_LINE_BREAK = "<br/>";
   public static String TRANSACTION_HISTORY_INTEREST_APPLIED = "InterestApplied";
   public static String TRANSACTION_HISTORY_DEPOSIT_ACTION = "Deposit";
@@ -131,6 +133,32 @@ public class MvcController {
 		model.addAttribute("user", user);
 		return "dispute_form";
 	}
+
+    /**
+   * HTML GET request handler that serves the "request_loan" page to the user.
+   * 
+   * @param model
+   * @return "request_loan" page
+   */
+  @GetMapping("/requestLoan")
+  public String showRequestLoanForm(Model model) {
+    User user = new User();
+    model.addAttribute("user", user);
+    return "requestloan_form";
+  }
+
+  /**
+   * HTML GET request handler that serves the "payloan_form" page to the user.
+   * 
+   * @param model
+   * @return "payloan_form" page
+   */
+  @GetMapping("/repayLoan")
+  public String showPayLoanForm(Model model) {
+    User user = new User();
+    model.addAttribute("user", user);
+    return "loanpayment_form";
+  }
 
   /**
    * HTML GET request handler that serves the "transfer_form" page to the user.
@@ -224,11 +252,19 @@ public class MvcController {
       cryptoBalanceInDollars += TestudoBankRepository.getCustomerCryptoBalance(jdbcTemplate, user.getUsername(), cryptoName).orElse(0.0) * cryptoPriceClient.getCurrentCryptoValue(cryptoName);
     }
 
+    String openLoanDueDate = TestudoBankRepository.getLoanDueDate(jdbcTemplate, user.getUsername());
+
+    // get loan amount due
+    int loanAmountInPennies = TestudoBankRepository.getLoanBalanceInPennies(jdbcTemplate, user.getUsername());
+    double loanAmount = loanAmountInPennies / 100.0;
+
     user.setFirstName((String)userData.get("FirstName"));
     user.setLastName((String)userData.get("LastName"));
     user.setBalance((int)userData.get("Balance")/100.0);
     double overDraftBalance = (int)userData.get("OverdraftBalance");
     user.setOverDraftBalance(overDraftBalance/100);
+    user.setLoanDueDate(openLoanDueDate);
+    user.setLoanBalance(loanAmount);
     user.setCryptoBalanceUSD(cryptoBalanceInDollars);
     user.setLogs(logs);
     user.setTransactionHist(transactionHistoryOutput);
@@ -367,6 +403,111 @@ public class MvcController {
     updateAccountInfo(user);
     return "account_info";
   }
+
+  @PostMapping("/requestloan")
+  public String requestLoan(@ModelAttribute("user") User user) {
+    String userID = user.getUsername();
+    String userPasswordAttempt = user.getPassword();
+    String userPassword = TestudoBankRepository.getCustomerPassword(jdbcTemplate, userID);
+
+    // Invalid login handling
+    if (userPasswordAttempt.equals(userPassword) == false) {
+      return "welcome";
+    }
+
+    /// Ineligible user for loan handling ///
+
+    // User has outstanding loan
+    if (TestudoBankRepository.doesCustomerHaveLoan(jdbcTemplate, userID) || user.getBalance() < 200 || user.getLoanRequestAmount() > 1000) {
+      return "loan_denied";
+    }
+
+    // User has less than $200 in balance
+    int userBalanceInPennies = TestudoBankRepository.getCustomerCashBalanceInPennies(jdbcTemplate, userID);
+    if (userBalanceInPennies < MINIMUM_BALANCE_FOR_LOAN_IN_PENNIES) {
+      return "welcome";
+    }
+
+    // Requested loan amount is more than user balance
+    int requestedLoanAmountInPennies = convertDollarsToPennies(user.getLoanRequestAmount());
+    if (requestedLoanAmountInPennies > userBalanceInPennies) {
+      return "welcome";
+    }
+
+    // Add loan to account
+    LocalDateTime loanRequestTime = LocalDateTime.now();
+    LocalDateTime loanDueTime = loanRequestTime.plusDays(DAYS_TO_REPAY_LOAN);
+    String loanDueDate = SQL_DATETIME_FORMATTER.format(convertLocalDateTimeToDate(loanDueTime));
+    TestudoBankRepository.insertRowToLoanLogsTable(jdbcTemplate, userID, requestedLoanAmountInPennies, loanDueDate);
+
+    // update user account info so that loan appears in "account_info" page
+    updateAccountInfo(user);
+    
+    return "account_info";
+  }
+
+  /**
+   * HTML POST request handler for paying off loan.
+   * 
+   * If the username and password are correct, then check if the customer has an open loan.
+   * Subtract the amount entered by the customer from their balance and from the loan amount remaining.
+   * Redirect to error page if the user attempts to submit a repayment of more than their balance.
+   * If the user attempts to pay more than what is left on the loan, then only subtract up to the remaining
+   * loan amount.
+   * If the remaining loan amount reaches zero, remove the loan from the user.
+   * 
+   * @param user
+   * @return "account_info" if repayment successful, "loan_error" if repayment criteria not met.
+   */
+  @PostMapping("/repayLoan")
+  public String repayLoan(@ModelAttribute("user") User user) {
+      String userID = user.getUsername();
+      String userPasswordAttempt = user.getPassword();
+      String userPassword = TestudoBankRepository.getCustomerPassword(jdbcTemplate, userID);
+  
+      // Invalid login handling
+      if (!userPasswordAttempt.equals(userPassword)) {
+          return "welcome";
+      }
+  
+      // Invalid Loan Repayment Handling
+      if (!TestudoBankRepository.doesCustomerHaveLoan(jdbcTemplate, userID)) {
+          return "repayloan_error";
+      }
+  
+      // User attempts to pay more than what is currently in their balance
+      int submittedLoanRepayAmountInPennies = convertDollarsToPennies(user.getLoanRepayAmount());
+      int userBalanceInPennies = TestudoBankRepository.getCustomerCashBalanceInPennies(jdbcTemplate, userID);
+      if (submittedLoanRepayAmountInPennies > userBalanceInPennies) {
+          return "repayloan_error";
+      }
+  
+      // Calculate interest amount
+      double interestRate = 0.02; // 2% interest rate
+      int remainingLoanAmountInPennies = TestudoBankRepository.getLoanBalanceInPennies(jdbcTemplate, userID);
+      double interestAmountInPennies = Math.ceil(remainingLoanAmountInPennies * interestRate);
+  
+      // Calculate total repayment amount including interest
+      int totalRepaymentAmountInPennies = remainingLoanAmountInPennies + (int) interestAmountInPennies;
+      int loanRepayAmountInPennies = Math.min(totalRepaymentAmountInPennies, submittedLoanRepayAmountInPennies);
+  
+      // Subtract repaid amount from user balance
+      TestudoBankRepository.decreaseCustomerCashBalance(jdbcTemplate, userID, loanRepayAmountInPennies);
+  
+      if (loanRepayAmountInPennies >= remainingLoanAmountInPennies) {
+          // Remove outstanding loan
+          TestudoBankRepository.deleteRowFromLoanLogsTable(jdbcTemplate, userID);
+      } else {
+          // Decrease remaining loan amount
+          TestudoBankRepository.decreaseLoanBalance(jdbcTemplate, userID, loanRepayAmountInPennies);
+      }
+  
+      // Update account info with loan information
+      updateAccountInfo(user);
+  
+      return "account_info";
+  }
+  
 	
   /**
    * HTML POST request handler for the Withdraw Form page.
